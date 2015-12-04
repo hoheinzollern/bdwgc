@@ -344,7 +344,7 @@ STATIC GC_thread GC_new_thread(DWORD id)
   } else {
     GC_ASSERT(!GC_win32_dll_threads);
     result = (struct GC_Thread_Rep *)
-                GC_INTERNAL_MALLOC(sizeof(struct GC_Thread_Rep), NORMAL);
+      GC_INTERNAL_MALLOC(sizeof(struct GC_Thread_Rep), NORMAL);
     /* result can be NULL */
     if (result == 0) return(0);
   }
@@ -2866,3 +2866,4 @@ GC_INNER void GC_init_parallel(void)
 # endif /* !GC_NO_THREAD_REDIRECTS */
 
 #endif /* GC_WIN32_THREADS */
+

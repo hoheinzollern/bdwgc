@@ -28,6 +28,8 @@
 /* It is also used internally for thread-local allocation.              */
 /* Manual use is hereby discouraged.                                    */
 
+#include "private/gc_priv.h"
+#include "private/thread_local_alloc.h"
 #include "gc.h"
 #include "gc_tiny_fl.h"
 
@@ -142,5 +144,73 @@ GC_API void GC_CALL GC_generic_malloc_many(size_t /* lb */, int /* k */,
                          *(void **)(result) = (void *)(first)); \
     ((void **)(result))[1] = (void *)(second); \
   } while (0)
+
+#ifndef THREAD_LOCAL_ALLOC
+  GC_INLINE GC_INNER void * GC_generic_malloc_kind(size_t lb, int k)
+#else
+  GC_INLINE GC_INNER void * GC_generic_malloc_kind_global(size_t lb, int k)
+#endif
+{
+    void *op;
+    size_t lg;
+    DCL_LOCK_STATE;
+
+    if (SMALL_OBJ(lb)) {
+        GC_DBG_COLLECT_AT_MALLOC(lb);
+        lg = GC_size_map[lb];
+        LOCK();
+        op = GC_freelist[k][lg];
+        if (EXPECT(0 == op, FALSE)) {
+            UNLOCK();
+            op = GENERAL_MALLOC((word)lb, k);
+            return op;
+        }
+        GC_ASSERT(0 == obj_link(op)
+            || ((word)obj_link(op)
+            <= (word)GC_greatest_plausible_heap_addr
+            && (word)obj_link(op)
+            >= (word)GC_least_plausible_heap_addr));
+        GC_freelist[k][lg] = obj_link(op);
+        obj_link(op) = 0;
+        GC_bytes_allocd += GRANULES_TO_BYTES(lg);
+        UNLOCK();
+        return op;
+    }
+    else {
+        return(GENERAL_MALLOC((word)lb, k));
+    }
+}
+
+#ifdef THREAD_LOCAL_ALLOC
+GC_INLINE GC_INNER void * GC_generic_malloc_kind(size_t bytes, int kind)
+{
+    size_t granules = ROUNDED_UP_GRANULES(bytes);
+    void *tsd;
+    void *result;
+    void **tiny_fl;
+#if !defined(USE_PTHREAD_SPECIFIC) && !defined(USE_WIN32_SPECIFIC)
+    GC_key_t k = GC_thread_key;
+    if (EXPECT(0 == k, FALSE)) {
+        /* We haven't yet run GC_init_parallel.  That means     */
+        /* we also aren't locking, so this is fairly cheap.     */
+        return GC_generic_malloc_kind_global(bytes, kind);
+    }
+    tsd = GC_getspecific(k);
+#else
+    tsd = GC_getspecific(GC_thread_key);
+#endif
+#if !defined(USE_COMPILER_TLS) && !defined(USE_WIN32_COMPILER_TLS)
+    if (EXPECT(0 == tsd, FALSE)) {
+        return GC_generic_malloc_kind_global(bytes, kind);
+    }
+#endif
+    GC_ASSERT(GC_is_initialized);
+    GC_ASSERT(GC_is_thread_tsd_valid(tsd));
+    tiny_fl = ((GC_tlfs)tsd)->freelists[kind];
+    GC_FAST_MALLOC_GRANS(result, granules, tiny_fl, DIRECT_GRANULES,
+        kind, GC_generic_malloc_kind_global(bytes, kind), obj_link(result) = 0);
+    return result;
+}
+#endif
 
 #endif /* !GC_INLINE_H */

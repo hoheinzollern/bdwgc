@@ -14,6 +14,7 @@
  */
 
 #include "private/gc_pmark.h"
+#include "gc_inline.h"
 
 /*
  * Some simple primitives for allocation with explicit type information.
@@ -38,8 +39,6 @@
  */
 
 #include "gc_typed.h"
-
-#define TYPD_EXTRA_BYTES (sizeof(word) - EXTRA_BYTES)
 
 STATIC int GC_explicit_kind = 0;
                         /* Object kind for objects with indirect        */
@@ -198,7 +197,7 @@ GC_make_sequence_descriptor(complex_descriptor *first,
 /* each of which can be described by a simple descriptor.       */
 /* We try to optimize some common cases.                        */
 /* If the result is COMPLEX, then a complex_descr* is returned  */
-/* in *complex_d.                                                       */
+/* in *complex_d.                                               */
 /* If the result is LEAF, then we built a LeafDescriptor in     */
 /* the structure pointed to by leaf.                            */
 /* The tag in the leaf structure is not set.                    */
@@ -593,40 +592,19 @@ GC_API GC_descr GC_CALL GC_make_descriptor(const GC_word * bm, size_t len)
     return result;
 }
 
-GC_API GC_ATTR_MALLOC void * GC_CALL GC_malloc_explicitly_typed(size_t lb,
-                                                                GC_descr d)
-{
-    ptr_t op;
-    size_t lg;
-    DCL_LOCK_STATE;
 
-    GC_ASSERT(GC_explicit_typing_initialized);
-    lb += TYPD_EXTRA_BYTES;
-    if (SMALL_OBJ(lb)) {
-        GC_DBG_COLLECT_AT_MALLOC(lb);
-        lg = GC_size_map[lb];
-        LOCK();
-        op = GC_eobjfreelist[lg];
-        if (EXPECT(0 == op, FALSE)) {
-            UNLOCK();
-            op = (ptr_t)GENERAL_MALLOC((word)lb, GC_explicit_kind);
-            if (0 == op) return 0;
-            lg = GC_size_map[lb];       /* May have been uninitialized. */
-        } else {
-            GC_eobjfreelist[lg] = obj_link(op);
-            obj_link(op) = 0;
-            GC_bytes_allocd += GRANULES_TO_BYTES(lg);
-            UNLOCK();
-        }
-        ((word *)op)[GRANULES_TO_WORDS(lg) - 1] = d;
-   } else {
-       op = (ptr_t)GENERAL_MALLOC((word)lb, GC_explicit_kind);
-       if (op != NULL) {
-            lg = BYTES_TO_GRANULES(GC_size(op));
-            ((word *)op)[GRANULES_TO_WORDS(lg) - 1] = d;
-       }
-   }
-   return((void *) op);
+GC_API GC_ATTR_MALLOC void * GC_CALL GC_malloc_explicitly_typed(size_t bytes, GC_descr d)
+{
+    bytes += TYPD_EXTRA_BYTES;
+    void *result = GC_generic_malloc_kind(bytes, GC_explicit_kind);
+    size_t granules;
+    if (SMALL_OBJ(bytes)) {
+        granules = GC_size_map[bytes];
+    } else {
+        granules = BYTES_TO_GRANULES(GC_size(result));
+    }
+    ((word *)result)[GRANULES_TO_WORDS(granules) - 1] = d;
+    return result;
 }
 
 GC_API GC_ATTR_MALLOC void * GC_CALL
@@ -665,8 +643,7 @@ GC_API GC_ATTR_MALLOC void * GC_CALL
    return((void *) op);
 }
 
-GC_API GC_ATTR_MALLOC void * GC_CALL GC_calloc_explicitly_typed(size_t n,
-                                                        size_t lb, GC_descr d)
+GC_API GC_ATTR_MALLOC void * GC_CALL GC_calloc_explicitly_typed(size_t n, size_t lb, GC_descr d)
 {
     ptr_t op;
     size_t lg;
